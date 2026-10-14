@@ -4,12 +4,33 @@
 #ifdef _WIN32
     #include <conio.h>
     #include <windows.h>
-    #define LIMPAR_TELA() system("cls")
+    #define LIMPAR_TELA() printf("\033[H")
+    
+    void setupConsole() {
+        SetConsoleOutputCP(CP_UTF8);
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD dwMode = 0;
+        GetConsoleMode(hOut, &dwMode);
+        dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(hOut, dwMode);
+    }
 #else
     #include <termios.h>
     #include <unistd.h>
-    #define LIMPAR_TELA() printf("\033[H\033[2J")
+    #define LIMPAR_TELA() printf("\033[H")
+    
+    void setupConsole() {
+
+    }
 #endif
+
+/* Códigos de Cores ANSI */
+#define COR_RESET   "\033[0m"
+#define COR_HEROI   "\033[1;32m" 
+#define COR_MONSTRO "\033[1;31m" 
+#define COR_MOEDA   "\033[1;33m" 
+#define COR_PAREDE  "\033[1;34m" 
+#define COR_TEXTO   "\033[1;37m" 
 
 #define LARGURA 22
 #define ALTURA 12
@@ -32,7 +53,6 @@ typedef struct {
     int ativo;              
 } Monstro;
 
-
 static int mapa[ALTURA][LARGURA] = {
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
     {1,0,2,0,0,1,0,2,0,0,0,0,1,0,0,0,2,0,0,2,0,1},
@@ -52,13 +72,11 @@ static int totalMoedasNoMapa = 0;
 
 static int contarMoedas(void) {
     int total = 0;
-    for (int i = 0; i < ALTURA; i++){
+    for (int i = 0; i < ALTURA; i++)
         for (int j = 0; j < LARGURA; j++)
             if (mapa[i][j] == 2) total++;
-        }
     return total;
 }
-
 
 static int lerTecla(void) {
 #ifdef _WIN32
@@ -78,16 +96,16 @@ static int lerTecla(void) {
 static void desenharJogo(const Jogador *p, const Monstro monstros[], const char *msg) {
     LIMPAR_TELA();
 
-    printf("===================================================\n");
+    printf(COR_TEXTO "===================================================\n");
     printf("                  PAC-CRAWLER                      \n");
     printf("===================================================\n");
     printf("[W] Cima | [S] Baixo | [A] Esquerda | [D] Direita | [Q] Sair\n");
-    printf("HP: %d/%d  |  Moedas: %d/%d\n\n", p->hp, HP_MAX, p->moedas, totalMoedasNoMapa);
+    printf("HP: " COR_MONSTRO "%d/%d" COR_TEXTO "  |  Moedas: " COR_MOEDA "%d/%d" COR_TEXTO "\n\n", p->hp, HP_MAX, p->moedas, totalMoedasNoMapa);
 
     for (int i = 0; i < ALTURA; i++) {
         for (int j = 0; j < LARGURA; j++) {
             if (i == p->y && j == p->x) {
-                printf("@ ");
+                printf(COR_HEROI "@ " COR_RESET);
                 continue;
             }
 
@@ -98,15 +116,20 @@ static void desenharJogo(const Jogador *p, const Monstro monstros[], const char 
                     break;
                 }
             }
-            if (ehMonstro) { printf("M "); continue; }
+            
+            if (ehMonstro) { 
+                printf(COR_MONSTRO "M " COR_RESET); 
+                continue; 
+            }
 
-            if (mapa[i][j] == 1)      printf("# ");
-            else if (mapa[i][j] == 2) printf("$ ");
+            if (mapa[i][j] == 1)      printf(COR_PAREDE "# " COR_RESET);
+            else if (mapa[i][j] == 2) printf(COR_MOEDA "$ " COR_RESET);
             else                      printf(". ");
         }
-        printf("\n");
+        
+        printf("          \n");
     }
-    printf("\nStatus: %s\n", msg);
+    printf("\n" COR_TEXTO "Status: %-60s\n" COR_RESET, msg);
 }
 
 static int celulaLivreParaMonstro(const Monstro monstros[], int x, int y) {
@@ -186,9 +209,9 @@ static int processarJogador(Jogador *p, Monstro monstros[], int novoX, int novoY
 }
 
 int main(void) {
-#ifdef _WIN32
-    SetConsoleOutputCP(CP_UTF8);
-#endif
+    setupConsole();
+    
+    printf("\033[?25l\033[2J");
 
     totalMoedasNoMapa = contarMoedas();
 
@@ -207,15 +230,15 @@ int main(void) {
         desenharJogo(&heroi, monstros, mensagem);
 
         if (heroi.moedas == totalMoedasNoMapa) {
-            printf("\n===================================================\n");
+            printf(COR_MOEDA "\n===================================================\n");
             printf("  PARABÉNS! Você limpou o labirinto de ouro!\n");
-            printf("===================================================\n");
+            printf("===================================================\n" COR_RESET);
             break;
         }
         if (heroi.hp <= 0) {
-            printf("\n===================================================\n");
+            printf(COR_MONSTRO "\n===================================================\n");
             printf("  GAME OVER! Os fantasmas te pegaram...\n");
-            printf("===================================================\n");
+            printf("===================================================\n" COR_RESET);
             break;
         }
 
@@ -231,7 +254,7 @@ int main(void) {
             default: continue;   
         }
         if (sair) {
-            printf("\nJogo encerrado.\n");
+            printf(COR_TEXTO "\nJogo encerrado.\n" COR_RESET);
             break;
         }
 
@@ -242,5 +265,7 @@ int main(void) {
         if (turno % TURNOS_POR_PASSO_MONSTRO == 0)
             moverMonstros(monstros, &heroi, mensagem);
     }
+    
+    printf("\033[?25h");
     return 0;
 }
