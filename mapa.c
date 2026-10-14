@@ -1,29 +1,39 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <conio.h>
-#include <math.h>
+
+#ifdef _WIN32
+    #include <conio.h>
+    #include <windows.h>
+    #define LIMPAR_TELA() system("cls")
+#else
+    #include <termios.h>
+    #include <unistd.h>
+    #define LIMPAR_TELA() printf("\033[H\033[2J")
+#endif
 
 #define LARGURA 22
 #define ALTURA 12
 #define QTD_MONSTROS 4
+#define MSG_TAM 100
+#define HP_MAX 100
+#define DANO_FANTASMA 20
+#define DANO_COMBATE 15
+#define TURNOS_POR_PASSO_MONSTRO 2   
 
-// Estrutura do Jogador
 typedef struct {
-    int x;
-    int y;
+    int x, y;
     int hp;
     int moedas;
 } Jogador;
 
-// Estrutura dos Monstros (Fantasmas)
 typedef struct {
-    int x;
-    int y;
-    int ativo; // 1 = Vivo, 0 = Derrotado
+    int x, y;
+    int inicioX, inicioY;   
+    int ativo;              
 } Monstro;
 
-// Mapa Expandido: 1 = Parede (#), 2 = Moeda ($), 0 = Chao (.)
-int mapa[ALTURA][LARGURA] = {
+
+static int mapa[ALTURA][LARGURA] = {
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
     {1,0,2,0,0,1,0,2,0,0,0,0,1,0,0,0,2,0,0,2,0,1},
     {1,0,1,1,0,1,0,1,1,1,1,0,1,0,1,1,1,1,1,1,0,1},
@@ -38,168 +48,199 @@ int mapa[ALTURA][LARGURA] = {
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
 };
 
-int totalMoedasNoMapa = 11;
+static int totalMoedasNoMapa = 0;
 
-// 1. FUNÇÃO: Renderiza o mapa e todas as entidades dinâmicas
-void desenharJogo(Jogador p, Monstro monstros[]) {
-    system("cls");
-    
-    printf("===================================================\n");
-    printf("           PAC-CRAWLER: PAC-MAN EM C               \n");
-    printf("===================================================\n");
-    printf("Controles: [W] Cima | [S] Baixo | [A] Esquerda | [D] Direita | [Q] Sair\n");
-    printf("HP: %d/100  |  Moedas: %d/%d\n\n", p.hp, p.moedas, totalMoedasNoMapa);
+static int contarMoedas(void) {
+    int total = 0;
+    for (int i = 0; i < ALTURA; i++){
+        for (int j = 0; j < LARGURA; j++)
+            if (mapa[i][j] == 2) total++;
+        }
+    return total;
+}
 
-    int i, j, k;
-    for (i = 0; i < ALTURA; i++) {
-        for (j = 0; j < LARGURA; j++) {
-            // Desenha o Herói
-            if (i == p.y && j == p.x) {
+
+static int lerTecla(void) {
+#ifdef _WIN32
+    return _getch();
+#else
+    struct termios antigo, novo;
+    tcgetattr(STDIN_FILENO, &antigo);
+    novo = antigo;
+    novo.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &novo);
+    int c = getchar();
+    tcsetattr(STDIN_FILENO, TCSANOW, &antigo);
+    return c;
+#endif
+}
+
+static void desenharJogo(const Jogador *p, const Monstro monstros[], const char *msg) {
+    LIMPAR_TELA();
+
+    printf("===================================================\n");
+    printf("                  PAC-CRAWLER                      \n");
+    printf("===================================================\n");
+    printf("[W] Cima | [S] Baixo | [A] Esquerda | [D] Direita | [Q] Sair\n");
+    printf("HP: %d/%d  |  Moedas: %d/%d\n\n", p->hp, HP_MAX, p->moedas, totalMoedasNoMapa);
+
+    for (int i = 0; i < ALTURA; i++) {
+        for (int j = 0; j < LARGURA; j++) {
+            if (i == p->y && j == p->x) {
                 printf("@ ");
                 continue;
             }
 
-            // Checa se há algum monstro nesta posição
             int ehMonstro = 0;
-            for (k = 0; k < QTD_MONSTROS; k++) {
+            for (int k = 0; k < QTD_MONSTROS; k++) {
                 if (monstros[k].ativo && monstros[k].x == j && monstros[k].y == i) {
-                    printf("M ");
                     ehMonstro = 1;
                     break;
                 }
             }
+            if (ehMonstro) { printf("M "); continue; }
 
-            if (ehMonstro) continue;
-
-            // Desenha elementos estáticos do mapa
-            if (mapa[i][j] == 1) {
-                printf("# ");
-            } else if (mapa[i][j] == 2) {
-                printf("$ ");
-            } else {
-                printf(". ");
-            }
+            if (mapa[i][j] == 1)      printf("# ");
+            else if (mapa[i][j] == 2) printf("$ ");
+            else                      printf(". ");
         }
         printf("\n");
     }
+    printf("\nStatus: %s\n", msg);
 }
 
-// 2. FUNÇÃO: Lógica de IA para movimentação dos monstros
-void moverMonstros(Monstro monstros[], Jogador *p, char *msg) {
-    int k;
-    for (k = 0; k < QTD_MONSTROS; k++) {
-        if (!monstros[k].ativo) continue;
+static int celulaLivreParaMonstro(const Monstro monstros[], int x, int y) {
+    if (mapa[y][x] == 1) return 0;
+    for (int k = 0; k < QTD_MONSTROS; k++)
+        if (monstros[k].ativo && monstros[k].x == x && monstros[k].y == y)
+            return 0;
+    return 1;
+}
 
-        int novoX = monstros[k].x;
-        int novoY = monstros[k].y;
+static void moverMonstros(Monstro monstros[], Jogador *p, char *msg) {
+    for (int k = 0; k < QTD_MONSTROS; k++) {
+        Monstro *m = &monstros[k];
+        if (!m->ativo) continue;
 
-        // IA Simples: O monstro tenta se aproximar do jogador
-        int dx = p->x - monstros[k].x;
-        int dy = p->y - monstros[k].y;
+        int dx = p->x - m->x;
+        int dy = p->y - m->y;
+        int passoX = (dx > 0) - (dx < 0);
+        int passoY = (dy > 0) - (dy < 0);
 
-        if (abs(dx) > abs(dy)) {
-            if (dx > 0) novoX++;
-            else if (dx < 0) novoX--;
+        int tent[2][2];
+        if (abs(dx) >= abs(dy)) {
+            tent[0][0] = passoX; tent[0][1] = 0;
+            tent[1][0] = 0;      tent[1][1] = passoY;
         } else {
-            if (dy > 0) novoY++;
-            else if (dy < 0) novoY--;
+            tent[0][0] = 0;      tent[0][1] = passoY;
+            tent[1][0] = passoX; tent[1][1] = 0;
         }
 
-        // Move o monstro apenas se a nova posição NÃO for parede
-        if (mapa[novoY][novoX] != 1) {
-            monstros[k].x = novoX;
-            monstros[k].y = novoY;
+        for (int t = 0; t < 2; t++) {
+            if (tent[t][0] == 0 && tent[t][1] == 0) continue;
+            int nx = m->x + tent[t][0];
+            int ny = m->y + tent[t][1];
+            if (celulaLivreParaMonstro(monstros, nx, ny)) {
+                m->x = nx;
+                m->y = ny;
+                break;
+            }
         }
 
-        // Se o monstro alcançar o jogador
-        if (monstros[k].x == p->x && monstros[k].y == p->y) {
-            p->hp -= 20;
-            sprintf(msg, "CUIDADO! Um fantasma te alcançou e causou 20 de dano!");
+        if (m->x == p->x && m->y == p->y) {
+            p->hp -= DANO_FANTASMA;
+            if (p->hp < 0) p->hp = 0;
+            m->x = m->inicioX;   
+            m->y = m->inicioY;
+            snprintf(msg, MSG_TAM, "CUIDADO! Um fantasma te alcançou e causou %d de dano!", DANO_FANTASMA);
         }
     }
 }
 
-// 3. FUNÇÃO: Processa o movimento e ações do jogador
-void processarJogador(Jogador *p, Monstro monstros[], int novoX, int novoY, char *msg) {
-    // Colisão com parede
+static int processarJogador(Jogador *p, Monstro monstros[], int novoX, int novoY, char *msg) {
     if (mapa[novoY][novoX] == 1) {
-        sprintf(msg, "Voce bateu na parede!");
-        return;
+        snprintf(msg, MSG_TAM, "Você bateu na parede!");
+        return 0;
     }
 
     p->x = novoX;
     p->y = novoY;
 
-    // Coleta de moeda
     if (mapa[novoY][novoX] == 2) {
         p->moedas++;
         mapa[novoY][novoX] = 0;
-        sprintf(msg, "Voce coletou uma moeda de ouro ($)!");
+        snprintf(msg, MSG_TAM, "Você coletou uma moeda de ouro ($)!");
     } else {
-        sprintf(msg, "Caminhando pelo labirinto...");
+        snprintf(msg, MSG_TAM, "Caminhando pelo labirinto...");
     }
 
-    // Combate: se o jogador andar diretamente para cima de um monstro
-    int k;
-    for (k = 0; k < QTD_MONSTROS; k++) {
+    for (int k = 0; k < QTD_MONSTROS; k++) {
         if (monstros[k].ativo && monstros[k].x == p->x && monstros[k].y == p->y) {
-            p->hp -= 15;
-            monstros[k].ativo = 0; // O fantasma é eliminado
-            sprintf(msg, "Voce combateu e eliminou um fantasma!");
+            p->hp -= DANO_COMBATE;
+            if (p->hp < 0) p->hp = 0;
+            monstros[k].ativo = 0;
+            snprintf(msg, MSG_TAM, "Você combateu e eliminou um fantasma! (-%d HP)", DANO_COMBATE);
         }
     }
+    return 1;
 }
 
-int main() {
-    Jogador heroi = {1, 1, 100, 0};
+int main(void) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
 
-    // Inicialização dos 4 Monstros em posições diferentes do mapa
+    totalMoedasNoMapa = contarMoedas();
+
+    Jogador heroi = {1, 1, HP_MAX, 0};
     Monstro monstros[QTD_MONSTROS] = {
-        {10, 1, 1},
-        {20, 5, 1},
-        {5, 9, 1},
-        {18, 9, 1}
+        {10, 1, 10, 1, 1},
+        {20, 5, 20, 5, 1},
+        {5, 9, 5, 9, 1},
+        {18, 9, 18, 9, 1}
     };
 
-    char tecla;
-    char mensagem[100] = "Explore o labirinto e fuja dos fantasmas!";
+    char mensagem[MSG_TAM] = "Explore o labirinto e fuja dos fantasmas!";
+    int turno = 0;
 
     while (1) {
-        desenharJogo(heroi, monstros);
-        printf("\nStatus: %s\n", mensagem);
-
-        if (heroi.hp <= 0) {
-            printf("\n===================================================\n");
-            printf("  GAME OVER! Os fantasmas te pegaram...           \n");
-            printf("===================================================\n");
-            break;
-        }
+        desenharJogo(&heroi, monstros, mensagem);
 
         if (heroi.moedas == totalMoedasNoMapa) {
             printf("\n===================================================\n");
-            printf("  PARABENS! Voce limpou o labirinto de ouro!      \n");
+            printf("  PARABÉNS! Você limpou o labirinto de ouro!\n");
+            printf("===================================================\n");
+            break;
+        }
+        if (heroi.hp <= 0) {
+            printf("\n===================================================\n");
+            printf("  GAME OVER! Os fantasmas te pegaram...\n");
             printf("===================================================\n");
             break;
         }
 
-        tecla = getch();
+        int tecla = lerTecla();
+        int novoX = heroi.x, novoY = heroi.y, sair = 0;
 
-        int novoX = heroi.x;
-        int novoY = heroi.y;
-
-        if (tecla == 'w' || tecla == 'W') novoY--;
-        if (tecla == 's' || tecla == 'S') novoY++;
-        if (tecla == 'a' || tecla == 'A') novoX--;
-        if (tecla == 'd' || tecla == 'D') novoX++;
-        if (tecla == 'q' || tecla == 'Q') {
+        switch (tecla) {
+            case 'w': case 'W': novoY--; break;
+            case 's': case 'S': novoY++; break;
+            case 'a': case 'A': novoX--; break;
+            case 'd': case 'D': novoX++; break;
+            case 'q': case 'Q': sair = 1; break;
+            default: continue;   
+        }
+        if (sair) {
             printf("\nJogo encerrado.\n");
             break;
         }
 
-        // Executa a rodada: move o jogador e depois atualiza a IA dos monstros
-        processarJogador(&heroi, monstros, novoX, novoY, mensagem);
-        moverMonstros(monstros, &heroi, mensagem);
-    }
+        if (!processarJogador(&heroi, monstros, novoX, novoY, mensagem))
+            continue;            
 
+        turno++;
+        if (turno % TURNOS_POR_PASSO_MONSTRO == 0)
+            moverMonstros(monstros, &heroi, mensagem);
+    }
     return 0;
 }
